@@ -15,9 +15,6 @@
 // TODO: keyboard input
 // TODO: display output
 
-extern crate byteorder;
-
-use byteorder::{ReadBytesExt, BigEndian};
 use std::env;
 use std::error::Error;
 use std::fs::File;
@@ -59,21 +56,57 @@ fn main() {
     }
 
     // Parse instructions into rom.
-    let mut rom: Vec<u16> = vec![];
-    let mut line_number: usize = 0;
+    let mut rom = Rom {rom: Vec::new(), line_number: 0};
+    rom.convert_buffer(&rom_buffer);
 
-    for instruction in rom_buffer.lines() {
-        // rom.push(match instruction.trim().parse() {
-        //     Ok(num) => num,
-        //     Err(why) => panic!("\nError: Failed to parse line {:?}: {}\n", line_number, why.description()),
-        // });
-        rom.push(&instruction.read_u16::<BigEndian>.unwrap());
-        line_number += 1;
-    }
+    // let mut rom: Vec<u16> = vec![];
+    // let mut line_number: usize = 0;
+
+    // for instruction in rom_buffer.lines() {
+    //     rom.push(match u16::from_str_radix(&instruction.trim(), 2) {
+    //         Ok(num) => num,
+    //         Err(why) => panic!("\nError: Failed to parse line {:?}: {}\n", line_number, why.description()),
+    //     });
+    //     line_number += 1;
+    // }
 
     // Output for debug.
-    for i in rom {
-        println!("{:?}", i);
+    rom.print();
+
+    // for i in rom {
+    //     println!("{:?}", i);
+    //     let inst_str = format!("{:0>16b}", i);
+    //     println!("{}", inst_str);
+    // }
+}
+
+struct Rom {
+    rom: Vec<u16>,
+    line_number: usize
+}
+
+impl Rom {
+    pub fn convert_buffer(&self, buffer: &String) {
+        for instruction in buffer.lines() {
+            self.rom.push(match u16::from_str_radix(&instruction.trim(), 2) {
+                Ok(num) => num,
+                Err(why) => panic!("\nError: Failed to parse line {:?}: {}\n", self.line_number, why.description()),
+            });
+            self.line_number += 1;
+        }
+
+    }
+
+    pub fn get_instruction(&self, address: usize) -> u16 {
+        return self.rom[address];
+    }
+
+    pub fn print(&self) {
+        for i in self.rom {
+            println!("{:?}", i);
+            let inst_str = format!("{:0>16b}", i);
+            println!("{}", inst_str);
+        }
     }
 }
 
