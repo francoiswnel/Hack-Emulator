@@ -1,5 +1,5 @@
 ///
-/// Rust Hack Emulator
+/// Hack Emulator
 /// Created by Francois W. Nel on 9 Jul 2016.
 ///
 /// TODO: Documentation
@@ -10,7 +10,6 @@
 
 // TODO: define hardware
 // TODO: implement hardware
-// TODO: reset cpu
 // TODO: instruction cycle
 // TODO: keyboard input
 // TODO: display output
@@ -38,9 +37,6 @@ fn main() {
     // Ensure that the file extension is ".hack".
     assert_eq!(rom_file_extension, "hack");
 
-    // If the test passed, confirm success.
-    println!("\nRunning: {:?}\n", rom_file_name);
-
     // Attempt to open the file.
     let mut rom_file = match File::open(&rom_path) {
         Err(why) => panic!("\nError: Failed to open {:?}: {}\n", rom_file_name, why.description()),
@@ -56,72 +52,145 @@ fn main() {
     }
 
     // Parse instructions into rom.
-    let mut rom = Rom {rom: Vec::new(), line_number: 0};
+    let mut rom = Rom {rom_map: Vec::new(), buffer_line_number: 0};
     rom.convert_buffer(&rom_buffer);
 
-    // let mut rom: Vec<u16> = vec![];
-    // let mut line_number: usize = 0;
+    let mut cpu = Cpu {register_a: 0, register_d: 0, register_m: 0};
 
-    // for instruction in rom_buffer.lines() {
-    //     rom.push(match u16::from_str_radix(&instruction.trim(), 2) {
-    //         Ok(num) => num,
-    //         Err(why) => panic!("\nError: Failed to parse line {:?}: {}\n", line_number, why.description()),
-    //     });
-    //     line_number += 1;
-    // }
+    let mut program_counter = ProgramCounter {register_pc: 0};
+
+    loop {
+        // TODO: Find safer way to break loop. Maybe try macro, modify get_instruction to return result.
+        if rom.get_instruction(program_counter.get_pc()) == 0 {
+            break;
+        }
+
+        println!("{:?}", rom.get_instruction(program_counter.get_pc()));
+        program_counter.increment();
+    }
 
     // Output for debug.
-    rom.print();
-
-    // for i in rom {
-    //     println!("{:?}", i);
-    //     let inst_str = format!("{:0>16b}", i);
-    //     println!("{}", inst_str);
+    // rom.print();
+    // let char_str: String = rom.get_instruction_string(1);
+    // for c in char_str.chars() {
+    //     print!("{}", c);
     // }
 }
 
 struct Rom {
-    rom: Vec<u16>,
-    line_number: usize
+    rom_map: Vec<u16>,
+    buffer_line_number: u16
 }
 
 impl Rom {
-    pub fn convert_buffer(&self, buffer: &String) {
+    pub fn convert_buffer(&mut self, buffer: &String) {
         for instruction in buffer.lines() {
-            self.rom.push(match u16::from_str_radix(&instruction.trim(), 2) {
+            self.rom_map.push(match u16::from_str_radix(&instruction.trim(), 2) {
                 Ok(num) => num,
-                Err(why) => panic!("\nError: Failed to parse line {:?}: {}\n", self.line_number, why.description()),
+                Err(why) => panic!("\nError: Failed to parse line {:?}: {}\n", self.buffer_line_number, why.description()),
             });
-            self.line_number += 1;
+            self.buffer_line_number += 1;
         }
-
     }
 
-    pub fn get_instruction(&self, address: usize) -> u16 {
-        return self.rom[address];
+    pub fn get_instruction(&self, address: u16) -> Option<u16> {
+        // TODO: Return Some(u16) if possible, otherwise None.
+        return self.rom_map[address as usize];
     }
 
+    pub fn get_instruction_string(&self, address: u16) -> String {
+        return format!("{:0>16b}", self.rom_map[address as usize]);
+    }
+
+    // Only for debug, delete for release
     pub fn print(&self) {
-        for i in self.rom {
-            println!("{:?}", i);
-            let inst_str = format!("{:0>16b}", i);
-            println!("{}", inst_str);
+        for instruction in &self.rom_map {
+            println!("{:?}", instruction);
+            let instruction_string_binary = format!("{:0>16b}", instruction);
+            println!("{}", instruction_string_binary);
         }
     }
 }
 
 struct Cpu {
-    // parts
+    register_a: u16,
+    register_d: u16,
+    register_m: u16
 }
 
 impl Cpu {
-    // implementation
+    pub fn set_register_a(&mut self, value: u16) {
+        self.register_a = value;
+    }
+
+    pub fn set_register_d(&mut self, value: u16) {
+        self.register_d = value;
+    }
+
+    pub fn set_register_m(&mut self, value: u16) {
+        self.register_m = value;
+    }
+
+    pub fn get_register_a(&self) -> u16 {
+        return self.register_a;
+    }
+
+    pub fn get_register_d(&self) -> u16 {
+        return self.register_d;
+    }
+
+    pub fn get_register_m(&self) -> u16 {
+        return self.register_m;
+    }
 }
 
 struct Memory {
-    ram: [u16; 24577]
+    ram_map: [u16; 16384],
+    display_map: [u16; 8192],
+    keyboard_map: u16
 }
 
 impl Memory {
-    // implementation
+    pub fn set_memory(&mut self, value: u16, address: u16) {
+        if address < 16384 {
+            self.ram_map[address as usize] = value;
+        }
+        else if address < 24576 {
+            self.display_map[(address - 16384) as usize] = value;
+        }
+    }
+
+    pub fn get_memory(&self, address: u16) -> u16 {
+        if address < 16384 {
+            return self.ram_map[address as usize];
+        }
+        else if address < 24576 {
+            return self.display_map[(address - 16384) as usize];
+        }
+        else {
+            return self.keyboard_map;
+        }
+    }
+}
+
+struct ProgramCounter {
+    register_pc: u16
+}
+
+impl ProgramCounter {
+    pub fn get_pc(&self) -> u16 {
+        return self.register_pc;
+    }
+
+    pub fn increment(&mut self) {
+        self.register_pc += 1;
+    }
+
+    pub fn load(&mut self, address: u16) {
+        self.register_pc = address;
+    }
+
+    pub fn reset(&mut self) {
+        self.register_pc = 0;
+    }
 }
