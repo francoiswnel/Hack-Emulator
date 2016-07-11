@@ -144,7 +144,8 @@ impl Cpu {
 
         let input_a: u16 = mux(instruction, self.output_alu_previous, a_instruction);
         let output_a: u16 = self.register_a(input_a, write_a);
-        let input_alu_d: u16 = self.register_d(self.output_alu_previous, write_d);
+        let self_output_alu_previous = self.output_alu_previous;
+        let input_alu_d: u16 = self.register_d(self_output_alu_previous, write_d);
         let input_alu_am: u16 = mux(output_a, input_m, instruction & 0b1 << 12 != 0);
         let output_m: u16 = self.alu(input_alu_d, input_alu_am, flags);
 
@@ -152,8 +153,8 @@ impl Cpu {
         let zr: bool = flags & 0b1 != 0;
         let pl: bool = !ng && !zr;
         let jump: bool = (c_instruction && instruction & 0b1 << 2 != 0 && ng) ||
-            (c_instruction && instruction & 0b1 << 1 != 0 && zr) ||
-            (c_instruction && instruction & 0b1 != 0 && pl);
+                         (c_instruction && instruction & 0b1 << 1 != 0 && zr) ||
+                         (c_instruction && instruction & 0b1 != 0 && pl);
         let pc = self.pc(output_a, jump, !jump, reset);
 
         return (output_m, output_a, pc, write_m);
