@@ -16,6 +16,7 @@
 
 use std::env;
 use std::error::Error;
+use std::fmt;
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
@@ -52,106 +53,84 @@ fn main() {
     }
 
     // Parse instructions into rom.
-    let mut rom = Rom {rom_map: Vec::new(), buffer_line_number: 0};
-    rom.convert_buffer(&rom_buffer);
+    let mut rom: Vec<u16> = vec![];
+    let mut buffer_line_number: u16 = 0;
 
-    let mut cpu = Cpu {register_a: 0, register_d: 0, register_m: 0};
-
-    let mut program_counter = ProgramCounter {register_pc: 0};
-
-    loop {
-        // TODO: Find safer way to break loop. Maybe try macro, modify get_instruction to return result.
-        if rom.get_instruction(program_counter.get_pc()) == 0 {
-            break;
-        }
-
-        println!("{:?}", rom.get_instruction(program_counter.get_pc()));
-        program_counter.increment();
+    for instruction in rom_buffer.lines() {
+        rom.push(match u16::from_str_radix(&instruction.trim(), 2) {
+            Ok(num) => num,
+            Err(why) => panic!("\nError: Failed to parse line {:?}: {}\n", buffer_line_number, why.description()),
+        });
+        buffer_line_number += 1;
     }
 
+    // Initialise the processor
+    let mut cpu = Cpu {
+        register_a: 0,
+        register_d: 0,
+        register_m: Memory {
+            ram_map: [0; 16384],
+            display_map: [0; 8192],
+            keyboard_map: 0,
+        },
+        pc: ProgramCounter {
+            register_pc: 0,
+        },
+    };
+
+    // Pretty print cpu before loop
+    println!("\n{:#?}\n", cpu);
+
+    // Main execution cycle loop,
+    //  runs until a None instruction is fetched.
+    loop {
+        let current_instruction: &u16 = match rom.get(cpu.pc.get() as usize) {
+            Some(current_instruction) => current_instruction,
+            None => break,
+        };
+
+        println!("{:?}", current_instruction);
+        let instruction_string_binary = format!("{:0>16b}", current_instruction);
+        println!("{}", instruction_string_binary);
+        cpu.pc.increment();
+    }
+
+    // Pretty print cpu after loop
+    println!("\n{:#?}\n", cpu);
+
     // Output for debug.
-    // rom.print();
     // let char_str: String = rom.get_instruction_string(1);
     // for c in char_str.chars() {
     //     print!("{}", c);
     // }
 }
 
-struct Rom {
-    rom_map: Vec<u16>,
-    buffer_line_number: u16
-}
-
-impl Rom {
-    pub fn convert_buffer(&mut self, buffer: &String) {
-        for instruction in buffer.lines() {
-            self.rom_map.push(match u16::from_str_radix(&instruction.trim(), 2) {
-                Ok(num) => num,
-                Err(why) => panic!("\nError: Failed to parse line {:?}: {}\n", self.buffer_line_number, why.description()),
-            });
-            self.buffer_line_number += 1;
-        }
-    }
-
-    pub fn get_instruction(&self, address: u16) -> Option<u16> {
-        // TODO: Return Some(u16) if possible, otherwise None.
-        return self.rom_map[address as usize];
-    }
-
-    pub fn get_instruction_string(&self, address: u16) -> String {
-        return format!("{:0>16b}", self.rom_map[address as usize]);
-    }
-
-    // Only for debug, delete for release
-    pub fn print(&self) {
-        for instruction in &self.rom_map {
-            println!("{:?}", instruction);
-            let instruction_string_binary = format!("{:0>16b}", instruction);
-            println!("{}", instruction_string_binary);
-        }
-    }
-}
-
 struct Cpu {
     register_a: u16,
     register_d: u16,
-    register_m: u16
+    register_m: Memory,
+    pc: ProgramCounter,
 }
 
 impl Cpu {
-    pub fn set_register_a(&mut self, value: u16) {
-        self.register_a = value;
-    }
 
-    pub fn set_register_d(&mut self, value: u16) {
-        self.register_d = value;
-    }
+}
 
-    pub fn set_register_m(&mut self, value: u16) {
-        self.register_m = value;
-    }
-
-    pub fn get_register_a(&self) -> u16 {
-        return self.register_a;
-    }
-
-    pub fn get_register_d(&self) -> u16 {
-        return self.register_d;
-    }
-
-    pub fn get_register_m(&self) -> u16 {
-        return self.register_m;
+impl fmt::Debug for Cpu {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Cpu {{\n    register_a: {:?}\n    register_d: {:?}\n    register_m: {:?}\n    register_pc: {:?}\n}}",
+               self.register_a, self.register_d, self.register_m.get(self.register_a), self.pc.get())
     }
 }
 
 struct Memory {
     ram_map: [u16; 16384],
     display_map: [u16; 8192],
-    keyboard_map: u16
+    keyboard_map: u16,
 }
 
 impl Memory {
-    pub fn set_memory(&mut self, value: u16, address: u16) {
+    pub fn set(&mut self, value: u16, address: u16) {
         if address < 16384 {
             self.ram_map[address as usize] = value;
         }
@@ -160,7 +139,7 @@ impl Memory {
         }
     }
 
-    pub fn get_memory(&self, address: u16) -> u16 {
+    pub fn get(&self, address: u16) -> u16 {
         if address < 16384 {
             return self.ram_map[address as usize];
         }
@@ -174,11 +153,11 @@ impl Memory {
 }
 
 struct ProgramCounter {
-    register_pc: u16
+    register_pc: u16,
 }
 
 impl ProgramCounter {
-    pub fn get_pc(&self) -> u16 {
+    pub fn get(&self) -> u16 {
         return self.register_pc;
     }
 
