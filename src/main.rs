@@ -78,14 +78,22 @@ fn main() {
     let mut cpu = Cpu {
         register_a: 0,
         register_d: 0,
-        register_m: Memory {
-            ram_map: [0; 0b1 << 14],
-            display_map: [0; 0b1 << 13],
-            keyboard_map: 0,
-        },
-        pc: ProgramCounter { register_pc: 0 },
-        flags: 0,
+        register_pc: 0,
+        output_alu_previous: 0,
     };
+
+    let mut memory = Memory {
+        ram: [0; 0b1 << 14],
+        screen: [0; 0b1 << 13],
+        keyboard: 0,
+    };
+
+    let mut input_m: u16 = 0;
+    let mut output_m: u16 = 0;
+    let mut address_m: u16 = 0;
+    let mut pc: u16 = 0;
+    let mut write_m: bool = false;
+    let reset: bool = false;
 
     // Pretty print cpu before loop
     println!("\n{:#?}\n", cpu);
@@ -93,142 +101,171 @@ fn main() {
     // Main execution cycle loop,
     //  runs until a None instruction is fetched.
     loop {
-        let current_instruction: &u16 = match rom.get(cpu.pc.get() as usize) {
-            Some(current_instruction) => current_instruction,
+        // Rom
+        let instruction: &u16 = match rom.get(pc as usize) {
+            Some(instruction) => instruction,
             None => break,
         };
 
-        println!("{:?}", current_instruction);
-        let instruction_string_binary = format!("{:0>16b}", current_instruction);
-        println!("{}", instruction_string_binary);
-        cpu.pc.increment();
+        let instruction: u16 = *instruction;
+
+        // Cpu
+        let output_cpu = cpu.cpu(instruction, input_m, reset);
+        output_m = output_cpu.0;
+        address_m = output_cpu.1;
+        pc = output_cpu.2;
+        write_m = output_cpu.3;
+
+        // Memory
+        input_m = memory.memory(output_m, address_m, write_m);
     }
 
     // Pretty print cpu after loop
     println!("\n{:#?}\n", cpu);
-
-    // Output for debug.
-    // let char_str: String = rom.get_instruction_string(1);
-    // for c in char_str.chars() {
-    //     print!("{}", c);
-    // }
 }
 
+#[derive(Debug)]
 struct Cpu {
     register_a: u16,
     register_d: u16,
-    register_m: Memory,
-    pc: ProgramCounter,
-    flags: u8, // [zx, nx, zy, ny, f, no, zr, ng]
+    register_pc: u16,
+    output_alu_previous: u16,
 }
 
 impl Cpu {
-    pub fn cpu(&mut self, instruction: u16, inM: u16) -> u16 {
-        if instruction < 0b1 << 15 {
-            self.register_a = instruction;
-        } else {
-        }
-        0
+    pub fn cpu(&mut self, instruction: u16, input_m: u16, reset: bool) -> (u16, u16, u16, bool) {
+        let mut flags = ((instruction >> 6) as u8) << 2;    // [zx, nx, zy, ny, f, no, zr, ng]
+        let a_instruction: bool = instruction & 0b1 << 15 == 0;
+        let c_instruction: bool = !a_instruction;
+
+        let write_a: bool = a_instruction || (c_instruction && instruction & 0b1 << 5 != 0);
+        let write_d: bool = c_instruction && instruction & 0b1 << 4 != 0;
+        let write_m: bool = c_instruction && instruction & 0b1 << 3 != 0;
+
+        let input_a: u16 = mux(instruction, self.output_alu_previous, a_instruction);
+        let output_a: u16 = self.register_a(input_a, write_a);
+        let input_alu_d: u16 = self.register_d(self.output_alu_previous, write_d);
+        let input_alu_am: u16 = mux(output_a, input_m, instruction & 0b1 << 12 != 0);
+        let output_m: u16 = self.alu(input_alu_d, input_alu_am, flags);
+
+        let ng: bool = flags & 0b1 != 0;
+        let zr: bool = flags & 0b1 != 0;
+        let pl: bool = !ng && !zr;
+        let jump: bool = (c_instruction && instruction & 0b1 << 2 != 0 && ng) ||
+            (c_instruction && instruction & 0b1 << 1 != 0 && zr) ||
+            (c_instruction && instruction & 0b1 != 0 && pl);
+        let pc = self.pc(output_a, jump, !jump, reset);
+
+        return (output_m, output_a, pc, write_m);
     }
 
-    fn alu(&mut self, mut x: u16, mut y: u16) -> u16 {
-        let mut out: u16 = 0;
+    fn alu(&mut self, mut x: u16, mut y: u16, mut flags: u8) -> u16 {
+        let mut output: u16 = 0;
 
-        if self.flags & 0b1 << 7 != 0 {
+        if flags & 0b1 << 7 != 0 {
             x = 0;
         }
 
-        if self.flags & 0b1 << 6 != 0 {
+        if flags & 0b1 << 6 != 0 {
             x = !x;
         }
 
-        if self.flags & 0b1 << 5 != 0 {
+        if flags & 0b1 << 5 != 0 {
             y = 0;
         }
 
-        if self.flags & 0b1 << 4 != 0 {
+        if flags & 0b1 << 4 != 0 {
             y = !y;
         }
 
-        if self.flags & 0b1 << 3 != 0 {
-            out = x + y;
+        if flags & 0b1 << 3 != 0 {
+            output = x + y;
         } else {
-            out = x & y;
+            output = x & y;
         }
 
-        if self.flags & 0b1 << 2 != 0 {
-            out = !out;
+        if flags & 0b1 << 2 != 0 {
+            output = !output;
         }
 
-        if out == 0 {
-            self.flags = self.flags | 0b1 << 1;
+        if output == 0 {
+            flags = flags | 0b1 << 1;
         }
 
-        if out < 0 {
-            self.flags = self.flags | 0b1;
+        if output < 0 {
+            flags = flags | 0b1;
         }
 
-        return out;
+        return output;
+    }
+
+    fn register_a(&mut self, input: u16, load: bool) -> u16 {
+        if load {
+            self.register_a = input;
+        }
+
+        return input;
+    }
+
+    fn register_d(&mut self, input: u16, load: bool) -> u16 {
+        if load {
+            self.register_d = input;
+        }
+
+        return input;
+    }
+
+    fn pc(&mut self, input: u16, load: bool, increment: bool, reset: bool) -> u16 {
+        if reset {
+            self.register_pc = 0;
+        } else if load {
+            self.register_pc = input;
+        } else if increment {
+            self.register_pc += 1;
+        }
+
+        return self.register_pc;
     }
 }
 
-impl fmt::Debug for Cpu {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f,
-               "Cpu {{\n\tregister_a:\t{:0>16b}\n\tregister_d:\t{:0>16b}\n\tregister_m:\t{:\
-                0>16b}\n\tregister_pc:\t{:0>16b}\n\tflags:\t\t{:0>8b}\n}}",
-               self.register_a,
-               self.register_d,
-               self.register_m.get(self.register_a),
-               self.pc.get(),
-               self.flags)
+fn mux(input_a: u16, input_b: u16, select: bool) -> u16 {
+    if select {
+        return input_b;
     }
+
+    return input_a;
 }
 
 struct Memory {
-    ram_map: [u16; 0b1 << 14],
-    display_map: [u16; 0b1 << 13],
-    keyboard_map: u16,
+    ram: [u16; 0b1 << 14],
+    screen: [u16; 0b1 << 13],
+    keyboard: u16,
 }
 
 impl Memory {
-    pub fn set(&mut self, value: u16, address: u16) {
+    pub fn memory(&mut self, input: u16, address: u16, load: bool) -> u16 {
+        if load {
+            self.set(input, address);
+        }
+
+        return self.get(address);
+    }
+
+    fn set(&mut self, input: u16, address: u16) {
         if address < 0b1 << 14 {
-            self.ram_map[address as usize] = value;
+            self.ram[address as usize] = input;
         } else if address < 0b11 << 14 {
-            self.display_map[(address - 0b1 << 14) as usize] = value;
+            self.screen[(address - 0b1 << 14) as usize] = input;
         }
     }
 
-    pub fn get(&self, address: u16) -> u16 {
+    fn get(&self, address: u16) -> u16 {
         if address < 16384 {
-            return self.ram_map[address as usize];
+            return self.ram[address as usize];
         } else if address < 0b11 << 14 {
-            return self.display_map[(address - 0b1 << 14) as usize];
+            return self.screen[(address - 0b1 << 14) as usize];
         } else {
-            return self.keyboard_map;
+            return self.keyboard;
         }
-    }
-}
-
-struct ProgramCounter {
-    register_pc: u16,
-}
-
-impl ProgramCounter {
-    pub fn get(&self) -> u16 {
-        return self.register_pc;
-    }
-
-    pub fn increment(&mut self) {
-        self.register_pc += 1;
-    }
-
-    pub fn load(&mut self, address: u16) {
-        self.register_pc = address;
-    }
-
-    pub fn reset(&mut self) {
-        self.register_pc = 0;
     }
 }
