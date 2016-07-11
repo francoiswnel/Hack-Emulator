@@ -8,8 +8,6 @@
 ///  $ hemu <path/to/rom_file.hack>
 ///
 
-// TODO: define hardware
-// TODO: implement hardware
 // TODO: instruction cycle
 // TODO: keyboard input
 // TODO: display output
@@ -40,7 +38,11 @@ fn main() {
 
     // Attempt to open the file.
     let mut rom_file = match File::open(&rom_path) {
-        Err(why) => panic!("\nError: Failed to open {:?}: {}\n", rom_file_name, why.description()),
+        Err(why) => {
+            panic!("\nError: Failed to open {:?}: {}\n",
+                   rom_file_name,
+                   why.description())
+        }
         Ok(rom_file) => rom_file,
     };
 
@@ -48,7 +50,11 @@ fn main() {
     let mut rom_buffer = String::new();
 
     match rom_file.read_to_string(&mut rom_buffer) {
-        Err(why) => panic!("\nError: Failed to read {:?}: {}\n", rom_file_name, why.description()),
+        Err(why) => {
+            panic!("\nError: Failed to read {:?}: {}\n",
+                   rom_file_name,
+                   why.description())
+        }
         Ok(_) => (),
     }
 
@@ -59,7 +65,11 @@ fn main() {
     for instruction in rom_buffer.lines() {
         rom.push(match u16::from_str_radix(&instruction.trim(), 2) {
             Ok(num) => num,
-            Err(why) => panic!("\nError: Failed to parse line {:?}: {}\n", buffer_line_number, why.description()),
+            Err(why) => {
+                panic!("\nError: Failed to parse line {:?}: {}\n",
+                       buffer_line_number,
+                       why.description())
+            }
         });
         buffer_line_number += 1;
     }
@@ -69,13 +79,12 @@ fn main() {
         register_a: 0,
         register_d: 0,
         register_m: Memory {
-            ram_map: [0; 16384],
-            display_map: [0; 8192],
+            ram_map: [0; 0b1 << 14],
+            display_map: [0; 0b1 << 13],
             keyboard_map: 0,
         },
-        pc: ProgramCounter {
-            register_pc: 0,
-        },
+        pc: ProgramCounter { register_pc: 0 },
+        flags: 0,
     };
 
     // Pretty print cpu before loop
@@ -110,43 +119,93 @@ struct Cpu {
     register_d: u16,
     register_m: Memory,
     pc: ProgramCounter,
+    flags: u8, // [zx, nx, zy, ny, f, no, zr, ng]
 }
 
 impl Cpu {
+    pub fn cpu(&mut self, instruction: u16, inM: u16) -> u16 {
+        if instruction < 0b1 << 15 {
+            self.register_a = instruction;
+        } else {
+        }
+        0
+    }
 
+    fn alu(&mut self, mut x: u16, mut y: u16) -> u16 {
+        let mut out: u16 = 0;
+
+        if self.flags & 0b1 << 7 != 0 {
+            x = 0;
+        }
+
+        if self.flags & 0b1 << 6 != 0 {
+            x = !x;
+        }
+
+        if self.flags & 0b1 << 5 != 0 {
+            y = 0;
+        }
+
+        if self.flags & 0b1 << 4 != 0 {
+            y = !y;
+        }
+
+        if self.flags & 0b1 << 3 != 0 {
+            out = x + y;
+        } else {
+            out = x & y;
+        }
+
+        if self.flags & 0b1 << 2 != 0 {
+            out = !out;
+        }
+
+        if out == 0 {
+            self.flags = self.flags | 0b1 << 1;
+        }
+
+        if out < 0 {
+            self.flags = self.flags | 0b1;
+        }
+
+        return out;
+    }
 }
 
 impl fmt::Debug for Cpu {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Cpu {{\n    register_a: {:?}\n    register_d: {:?}\n    register_m: {:?}\n    register_pc: {:?}\n}}",
-               self.register_a, self.register_d, self.register_m.get(self.register_a), self.pc.get())
+        write!(f,
+               "Cpu {{\n\tregister_a:\t{:0>16b}\n\tregister_d:\t{:0>16b}\n\tregister_m:\t{:\
+                0>16b}\n\tregister_pc:\t{:0>16b}\n\tflags:\t\t{:0>8b}\n}}",
+               self.register_a,
+               self.register_d,
+               self.register_m.get(self.register_a),
+               self.pc.get(),
+               self.flags)
     }
 }
 
 struct Memory {
-    ram_map: [u16; 16384],
-    display_map: [u16; 8192],
+    ram_map: [u16; 0b1 << 14],
+    display_map: [u16; 0b1 << 13],
     keyboard_map: u16,
 }
 
 impl Memory {
     pub fn set(&mut self, value: u16, address: u16) {
-        if address < 16384 {
+        if address < 0b1 << 14 {
             self.ram_map[address as usize] = value;
-        }
-        else if address < 24576 {
-            self.display_map[(address - 16384) as usize] = value;
+        } else if address < 0b11 << 14 {
+            self.display_map[(address - 0b1 << 14) as usize] = value;
         }
     }
 
     pub fn get(&self, address: u16) -> u16 {
         if address < 16384 {
             return self.ram_map[address as usize];
-        }
-        else if address < 24576 {
-            return self.display_map[(address - 16384) as usize];
-        }
-        else {
+        } else if address < 0b11 << 14 {
+            return self.display_map[(address - 0b1 << 14) as usize];
+        } else {
             return self.keyboard_map;
         }
     }
