@@ -8,7 +8,6 @@
 ///  $ hemu <path/to/rom_file.hack>
 ///
 
-// TODO: instruction cycle
 // TODO: keyboard input
 // TODO: display output
 
@@ -74,12 +73,22 @@ fn main() {
         buffer_line_number += 1;
     }
 
-    // Initialise the processor
+    // Initialise the processor and memory.
     let mut cpu = Cpu {
         register_a: 0,
         register_d: 0,
         register_pc: 0,
-        output_alu_previous: 0,
+        input_alu_d: 0,
+        input_alu_am: 0,
+        output_alu: 0,
+        input_a: 0,
+        output_a: 0,
+        flags: 0,
+        write_a: false,
+        write_d: false,
+        write_m: false,
+        jump: false,
+        instruction_type: false,
     };
 
     let mut memory = Memory {
@@ -88,40 +97,52 @@ fn main() {
         keyboard: 0,
     };
 
-    let mut input_m: u16 = 0;
-    let mut output_m: u16 = 0;
-    let mut address_m: u16 = 0;
-    let mut pc: u16 = 0;
-    let mut write_m: bool = false;
+    // Initialise interconnect and loop control variables.
+    let mut instruction: u16 = 0;
+    let mut instruction_previous: u16 = 0;
+    let mut instruction_previous_previous: u16 = 0;
+    let mut infinite_loop_counter: u16 = 0;
+
+    // Interconnect: output_alu, address_m, write_m, pc
+    let mut cpu_memory_interconnect: (u16, u16, bool, u16) = (0, 0, false, 0);
+    let mut memory_cpu_interconnect: u16 = 0;
     let reset: bool = false;
 
-    // Pretty print cpu before loop
-    println!("\n{:#?}\n", cpu);
-
-    // Main execution cycle loop,
-    //  runs until a None instruction is fetched.
+    // Main execution loop:
+    //  Runs until a None instruction is fetched
+    //  or an infinite loop is detected.
     loop {
-        // Rom
-        let instruction: &u16 = match rom.get(pc as usize) {
+        // Fetch instruction from Rom.
+        instruction = *(match rom.get(cpu_memory_interconnect.3 as usize) {
             Some(instruction) => instruction,
             None => break,
-        };
+        });
 
-        let instruction: u16 = *instruction;
+        // Detect infinite loop.
+        if instruction_previous_previous == instruction {
+            if infinite_loop_counter > 1 {
+                break;
+            }
+            infinite_loop_counter += 1;
+        }
 
-        // Cpu
-        let output_cpu = cpu.cpu(instruction, input_m, reset);
-        output_m = output_cpu.0;
-        address_m = output_cpu.1;
-        pc = output_cpu.2;
-        write_m = output_cpu.3;
+        // Process instruction using Cpu.
+        cpu_memory_interconnect = cpu.cpu(instruction, memory_cpu_interconnect, reset);
 
-        // Memory
-        input_m = memory.memory(output_m, address_m, write_m);
+        // Store output in Memory.
+        memory_cpu_interconnect = memory.memory(
+            cpu_memory_interconnect.0,
+            cpu_memory_interconnect.1,
+            cpu_memory_interconnect.2,
+        );
+
+        // Pretty print cpu state for debug.
+        println!("Instruction: {:0>16b}\n\n{:#?}\n", instruction, cpu);
+
+        // Update variables for infinte loop detection.
+        instruction_previous_previous = instruction_previous;
+        instruction_previous = instruction;
     }
-
-    // Pretty print cpu after loop
-    println!("\n{:#?}\n", cpu);
 }
 
 #[derive(Debug)]
@@ -129,103 +150,121 @@ struct Cpu {
     register_a: u16,
     register_d: u16,
     register_pc: u16,
-    output_alu_previous: u16,
+    input_alu_d: u16,
+    input_alu_am: u16,
+    output_alu: u16,
+    input_a: u16,
+    output_a: u16,
+    flags: u8,
+    write_a: bool,
+    write_d: bool,
+    write_m: bool,
+    jump: bool,
+    instruction_type: bool,
 }
 
 impl Cpu {
-    pub fn cpu(&mut self, instruction: u16, input_m: u16, reset: bool) -> (u16, u16, u16, bool) {
-        let mut flags = ((instruction >> 6) as u8) << 2;    // [zx, nx, zy, ny, f, no, zr, ng]
-        let a_instruction: bool = instruction & 0b1 << 15 == 0;
-        let c_instruction: bool = !a_instruction;
+    pub fn cpu(&mut self, instruction: u16, input_m: u16, reset: bool) -> (u16, u16, bool, u16) {
+        // Get control flags from instruction: [zx, nx, zy, ny, f, no, zr, ng].
+        self.flags = ((instruction >> 6) as u8) << 2;
 
-        let write_a: bool = a_instruction || (c_instruction && instruction & 0b1 << 5 != 0);
-        let write_d: bool = c_instruction && instruction & 0b1 << 4 != 0;
-        let write_m: bool = c_instruction && instruction & 0b1 << 3 != 0;
+        // Get instruction type: true = c_instruction, false = a_instruction.
+        self.instruction_type = instruction & 0b1 << 15 != 0;
 
-        let input_a: u16 = mux(instruction, self.output_alu_previous, a_instruction);
-        let output_a: u16 = self.register_a(input_a, write_a);
-        let self_output_alu_previous = self.output_alu_previous;
-        let input_alu_d: u16 = self.register_d(self_output_alu_previous, write_d);
-        let input_alu_am: u16 = mux(output_a, input_m, instruction & 0b1 << 12 != 0);
-        let output_m: u16 = self.alu(input_alu_d, input_alu_am, flags);
+        // Set write flags.
+        self.write_a = !self.instruction_type || (self.instruction_type && instruction & 0b1 << 5 != 0);
+        self.write_d = self.instruction_type && instruction & 0b1 << 4 != 0;
+        self.write_m = self.instruction_type && instruction & 0b1 << 3 != 0;
 
-        let ng: bool = flags & 0b1 != 0;
-        let zr: bool = flags & 0b1 != 0;
+        // Get Alu output.
+        self.input_a = mux(self.output_alu, instruction, !self.instruction_type);
+        self.output_a = self.register_a();
+        self.input_alu_am = mux(self.output_a, input_m, instruction & 0b1 << 12 != 0);
+        self.alu();
+        self.input_alu_d = self.register_d();
+
+        // Set jump flag.
+        let ng: bool = self.flags & 0b1 != 0;
+        let zr: bool = self.flags & 0b1 != 0;
         let pl: bool = !ng && !zr;
-        let jump: bool = (c_instruction && instruction & 0b1 << 2 != 0 && ng) ||
-                         (c_instruction && instruction & 0b1 << 1 != 0 && zr) ||
-                         (c_instruction && instruction & 0b1 != 0 && pl);
-        let pc = self.pc(output_a, jump, !jump, reset);
+        self.jump = (self.instruction_type && instruction & 0b1 << 2 != 0 && ng) ||
+            (self.instruction_type && instruction & 0b1 << 1 != 0 && zr) ||
+            (self.instruction_type && instruction & 0b1 != 0 && pl);
 
-        return (output_m, output_a, pc, write_m);
+        // Increment program counter or jump to instruction.
+        self.pc(reset);
+
+        (self.output_alu, self.output_a, self.write_m, self.register_pc)
     }
 
-    fn alu(&mut self, mut x: u16, mut y: u16, mut flags: u8) -> u16 {
-        let mut output: u16 = 0;
+    fn alu(&mut self) {
+        let mut x: u16 = self.input_alu_d;
+        let mut y: u16 = self.input_alu_am;
 
-        if flags & 0b1 << 7 != 0 {
+        // If zx flag is set.
+        if self.flags & 0b1 << 7 != 0 {
             x = 0;
         }
 
-        if flags & 0b1 << 6 != 0 {
+        // If nx flag is set.
+        if self.flags & 0b1 << 6 != 0 {
             x = !x;
         }
 
-        if flags & 0b1 << 5 != 0 {
+        // If zy flag is set.
+        if self.flags & 0b1 << 5 != 0 {
             y = 0;
         }
 
-        if flags & 0b1 << 4 != 0 {
+        // If ny flag is set.
+        if self.flags & 0b1 << 4 != 0 {
             y = !y;
         }
 
-        if flags & 0b1 << 3 != 0 {
-            output = x + y;
+        // Determine function based on f flag.
+        if self.flags & 0b1 << 3 != 0 {
+            self.output_alu = x + y;
         } else {
-            output = x & y;
+            self.output_alu = x & y;
         }
 
-        if flags & 0b1 << 2 != 0 {
-            output = !output;
+        // If no flag is set.
+        if self.flags & 0b1 << 2 != 0 {
+            self.output_alu = !self.output_alu;
         }
 
-        if output == 0 {
-            flags = flags | 0b1 << 1;
+        // Set zr and ng flags.
+        if self.output_alu == 0 {
+            self.flags = self.flags | 0b1 << 1;
+        } else if self.output_alu & 0b1 << 15 != 0 {
+            self.flags = self.flags | 0b1;
         }
-
-        if output < 0 {
-            flags = flags | 0b1;
-        }
-
-        return output;
     }
 
-    fn register_a(&mut self, input: u16, load: bool) -> u16 {
-        if load {
-            self.register_a = input;
+    fn register_a(&mut self) -> u16 {
+        if self.write_a {
+            self.register_a = self.input_a;
         }
 
-        return input;
+        self.register_a
     }
 
-    fn register_d(&mut self, input: u16, load: bool) -> u16 {
-        if load {
-            self.register_d = input;
+    fn register_d(&mut self) -> u16 {
+        if self.write_d {
+            self.register_d = self.output_alu;
         }
 
-        return input;
+        self.register_d
     }
 
-    fn pc(&mut self, input: u16, load: bool, increment: bool, reset: bool) -> u16 {
+    fn pc(&mut self, reset: bool) {
         if reset {
             self.register_pc = 0;
-        } else if load {
-            self.register_pc = input;
-        } else if increment {
+        } else if self.jump {
+            self.register_pc = self.output_a;
+        } else if !self.jump {
             self.register_pc += 1;
         }
-
-        return self.register_pc;
     }
 }
 
@@ -234,7 +273,7 @@ fn mux(input_a: u16, input_b: u16, select: bool) -> u16 {
         return input_b;
     }
 
-    return input_a;
+    input_a
 }
 
 struct Memory {
@@ -249,7 +288,7 @@ impl Memory {
             self.set(input, address);
         }
 
-        return self.get(address);
+        self.get(address)
     }
 
     fn set(&mut self, input: u16, address: u16) {
@@ -261,7 +300,7 @@ impl Memory {
     }
 
     fn get(&self, address: u16) -> u16 {
-        if address < 16384 {
+        if address < 0b1 << 14 {
             return self.ram[address as usize];
         } else if address < 0b11 << 14 {
             return self.screen[(address - 0b1 << 14) as usize];
