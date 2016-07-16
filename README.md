@@ -4,4 +4,4 @@
 
 # Status
 
-Work in progress. Can currently open and read the rom file. Next step is to define and implement the hardware, and then work on the instruction cycle and input/output.
+Got code execution going! The emulator can process basic programs which only make use of the registers, memory, and the Alu, such as a calculator storing its results in memory. There are still a few bugs left to fix before it will be emulating the Cpu exactly, and the emulator still needs keyboard input and a way to visualise the screen.
